@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>My PlayCanvas Web Components App</title>
+    <script type="importmap">
+      {
+          "imports": {
+              "playcanvas": "https://cdn.jsdelivr.net/npm/playcanvas@2.5.0/build/playcanvas.mjs"
+          }
+      }
+    </script>
+    <script
+      type="module"
+      src="https://cdn.jsdelivr.net/npm/@playcanvas/web-components@0.2.2/dist/pwc.min.js"
+    ></script>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Added canvas element -->
+    <canvas id="application"></canvas>
+    
+    <!-- PlayCanvas application script -->
+    <script type="module">
+      import * as pc from "playcanvas";
+
+      const canvas = document.getElementById("application");
+
+      // Enable WebGPU if supported
+      const graphicsDeviceOptions = {};
+      if (navigator.gpu) {
+        graphicsDeviceOptions.useWebGPU = true;
+        console.log("WebGPU enabled.");
+      } else {
+        console.log("WebGPU not available. Falling back to WebGL.");
+      }
+
+      // Create an application with WebGPU enabled if available
+      const app = new pc.Application(canvas, { graphicsDeviceOptions });
+      app.setCanvasResolution(pc.RESOLUTION_AUTO);
+      app.setCanvasFillMode(pc.FILLMODE_FILL_WINDOW);
+      app.start();
+
+      // Create a camera
+      const camera = new pc.Entity();
+      camera.addComponent("camera", {
+        clearColor: new pc.Color(0.3, 0.3, 0.7)
+      });
+      camera.setPosition(0, 0, 3);
+      app.root.addChild(camera);
+
+      // Create a light
+      const light = new pc.Entity();
+      light.addComponent("light");
+      light.setEulerAngles(45, 45, 0);
+      app.root.addChild(light);
+
+      // Variable to store the loaded model
+      let modelEntity = null;
+
+      // Load and render the GLB model
+      const url = "./DamagedHelmet.glb"; // Replace with the correct URL for your model
+      app.assets.loadFromUrl(url, "container", (err, asset) => {
+        if (!err) {
+          modelEntity = new pc.Entity();
+          modelEntity.addComponent("model", {
+            type: "asset",
+            asset: asset.resource.model
+          });
+          modelEntity.setLocalScale(1, 1, 1);
+          app.root.addChild(modelEntity);
+        } else {
+          console.error("Failed to load GLB:", err);
+        }
+      });
+
+      // Mouse controls for desktop
+      let isDragging = false;
+      let dragMode = null; // "rotate" or "pan"
+      const previousPosition = { x: 0, y: 0 };
+      const rotationSensitivity = 0.2; // Adjust rotational sensitivity as needed
+      const panSensitivity = 0.01;       // Adjust panning sensitivity as needed
+
+      document.addEventListener("mousedown", (e) => {
+        isDragging = true;
+        previousPosition.x = e.clientX;
+        previousPosition.y = e.clientY;
+        // Left button rotates; Middle button pans.
+        if (e.button === 0) {
+          dragMode = "rotate";
+        } else if (e.button === 1) {
+          dragMode = "pan";
+        }
+      });
+
+      document.addEventListener("mousemove", (e) => {
+        if (!isDragging) return;
+        const deltaX = e.clientX - previousPosition.x;
+        const deltaY = e.clientY - previousPosition.y;
+        previousPosition.x = e.clientX;
+        previousPosition.y = e.clientY;
+        if (modelEntity) {
+          if (dragMode === "rotate") {
+            // Rotate the model (invert Y axis as needed)
+            modelEntity.rotate(deltaY * rotationSensitivity, deltaX * rotationSensitivity, 0);
+          } else if (dragMode === "pan") {
+            // Pan: rightward drag moves right; upward drag moves up.
+            modelEntity.translate(deltaX * panSensitivity, -deltaY * panSensitivity, 0);
+          }
+        }
+      });
+
+      document.addEventListener("mouseup", () => {
+        isDragging = false;
+        dragMode = null;
+      });
+
+      // Mouse wheel for zoom (adjust camera z-position)
+      const zoomSensitivity = 0.01; // Adjust zoom sensitivity as needed
+      const minZoom = 1;   // Minimum z distance
+      const maxZoom = 2000; // Maximum z distance
+
+      document.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const currentPos = camera.getPosition();
+        let newZ = currentPos.z + e.deltaY * zoomSensitivity;
+        newZ = Math.max(minZoom, Math.min(maxZoom, newZ));
+        camera.setPosition(currentPos.x, currentPos.y, newZ);
+      }, { passive: false });
+
+      // Touch controls for mobile devices
+      let lastTouch = null; // For one-finger rotation
+      // For two-finger gestures, store initial states.
+      let initialAvg = null;
+      let initialPinchDistance = 0;
+      let initialCameraZ = 0;
+
+      canvas.addEventListener("touchstart", (e) => {
+        if (e.touches.length === 1) {
+          // One finger for rotation.
+          lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        } else if (e.touches.length === 2) {
+          // Two fingers for pan and pinch zoom.
+          // Calculate the average touch point.
+          initialAvg = {
+            x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+            y: (e.touches[0].clientY + e.touches[1].clientY) / 2
+          };
+          initialPinchDistance = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+          initialCameraZ = camera.getPosition().z;
+        }
+      }, { passive: false });
+
+      canvas.addEventListener("touchmove", (e) => {
+        e.preventDefault();
+        if (e.touches.length === 1 && lastTouch) {
+          // Rotate the model with one touch.
+          const currentTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+          const deltaX = currentTouch.x - lastTouch.x;
+          const deltaY = currentTouch.y - lastTouch.y;
+          lastTouch = currentTouch;
+          if (modelEntity) {
+            modelEntity.rotate(deltaY * rotationSensitivity, deltaX * rotationSensitivity, 0);
+          }
+        } else if (e.touches.length === 2 && initialAvg) {
+          // For two fingers, calculate the new average point.
+          const newAvg = {
+            x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+            y: (e.touches[0].clientY + e.touches[1].clientY) / 2
+          };
+          // Calculate pan delta based on average movement.
+          const panDeltaX = newAvg.x - initialAvg.x;
+          const panDeltaY = newAvg.y - initialAvg.y;
+          // Update the model's position for swipe (pan)
+          if (modelEntity) {
+            modelEntity.translate(panDeltaX * panSensitivity, -panDeltaY * panSensitivity, 0);
+          }
+          // Update initialAvg for continuous panning.
+          initialAvg = newAvg;
+
+          // Also handle pinch zoom.
+          const currentPinchDistance = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+          const pinchRatio = currentPinchDistance / initialPinchDistance;
+          let newZ = initialCameraZ / pinchRatio;
+          newZ = Math.max(minZoom, Math.min(maxZoom, newZ));
+          const currentPos = camera.getPosition();
+          camera.setPosition(currentPos.x, currentPos.y, newZ);
+        }
+      }, { passive: false });
+
+      canvas.addEventListener("touchend", (e) => {
+        if (e.touches.length === 0) {
+          lastTouch = null;
+          initialAvg = null;
+        }
+        if (e.touches.length < 2) {
+          // Reset pinch initial values when less than 2 fingers remain.
+          initialPinchDistance = 0;
+        }
+      });
+    </script>
+  </body>
+</html>
